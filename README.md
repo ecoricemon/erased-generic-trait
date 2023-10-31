@@ -1,2 +1,2 @@
 # erased-generic-trait
-Rust crates for generating a trait object from traits with generic methods.
+Rust crates for generating trait objects from traits with generic methods.
