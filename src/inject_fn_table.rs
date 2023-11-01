@@ -266,6 +266,11 @@ fn impl_fn_table_builder(
             }
 
             fn with <#common_generic> (mut self) -> Self {
+                self.add::<#common_generic_ident>();
+                self
+            }
+            
+            fn add <#common_generic> (&mut self) -> &mut Self {
                 #(
                     #insert_blocks
                 )*
