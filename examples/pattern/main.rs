@@ -169,7 +169,7 @@ impl HandlerFnTable {
         self.add::<E>();
         self
     }
-    
+
     // Inserts new entry.
     #[allow(dead_code)]
     fn add<E: Element>(&mut self) -> &mut Self {

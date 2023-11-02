@@ -1,8 +1,12 @@
 use crate::common::*;
 use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::Parser;
-use syn::{parse_macro_input, parse_quote, Ident};
+use syn::{
+    parse_macro_input, parse_quote, Block, Field, Fields, FieldsNamed, Ident, ItemStruct,
+    Signature, TraitItemFn, Type,
+};
 
 /// Injects function table fields for the generic methods,
 /// which name is something like `fn_table_foo`, into the struct.
@@ -27,13 +31,13 @@ pub fn inject_fn_table(attr: TokenStream, item: TokenStream) -> TokenStream {
         .collect::<Vec<_>>();
 
     // Generates function table field for each generic method.
-    let mut st = parse_macro_input!(item as syn::ItemStruct);
+    let mut st = parse_macro_input!(item as ItemStruct);
     let mut sigs = Vec::new();
     let mut builder_field_idents = Vec::new();
     let mut table_type_idents = Vec::new();
     let mut table_type_defines = Vec::new();
     for t in attr_tokens {
-        let ast = parse_macro_input!(t as syn::TraitItemFn);
+        let ast = parse_macro_input!(t as TraitItemFn);
         sigs.push(ast.sig.clone());
         if let Some((field_ident, table_type_ident, table_type_define)) = gen_field(ast, &st.ident)
         {
@@ -48,11 +52,11 @@ pub fn inject_fn_table(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // Inserts new `fn_table` field into the struct.
     let st_fields = match &mut st.fields {
-        syn::Fields::Named(syn::FieldsNamed { named, .. }) => named,
+        Fields::Named(FieldsNamed { named, .. }) => named,
         _ => unimplemented!(),
     };
     let builder_ident = clone_ident_with_suffix(&st.ident, "FnTable");
-    let fn_table_field = syn::Field::parse_named
+    let fn_table_field = Field::parse_named
         .parse2(quote! {
             fn_table: #builder_ident
         })
@@ -78,15 +82,12 @@ pub fn inject_fn_table(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// Generates function table field.
-fn gen_field(
-    ast: syn::TraitItemFn,
-    st_ident: &Ident,
-) -> Option<(Ident, Ident, proc_macro2::TokenStream)> {
+fn gen_field(ast: TraitItemFn, st_ident: &Ident) -> Option<(Ident, Ident, TokenStream2)> {
     // Nothing for non-generic method.
     is_generic(&ast.sig).then_some(0)?;
 
     // Gathers input and output types.
-    let mut input_types: Vec<syn::Type> = Vec::new();
+    let mut input_types: Vec<Type> = Vec::new();
     for arg in ast.sig.inputs {
         let (ident, _, mutability) = parse_arg(&arg);
         match (ident.to_string().as_str(), mutability) {
@@ -95,7 +96,7 @@ fn gen_field(
             _ => {
                 let symbols = get_generic_symbols(&ast.sig.generics);
                 let mut arg = arg.clone();
-                let _ = change_arg_to_any(&mut arg, symbols.iter().map(|s| s.as_str()));
+                change_arg_to_any(&mut arg, symbols.iter().map(|s| s.as_str()));
                 let (_, ty, _) = parse_arg(&arg);
                 input_types.push(ty.clone());
             }
@@ -125,17 +126,13 @@ fn gen_field(
 }
 
 /// Implements erased generic for the struct.
-fn impl_erased_for_st(
-    erased_name: &str,
-    st_ident: &Ident,
-    sigs: &[syn::Signature],
-) -> proc_macro2::TokenStream {
+fn impl_erased_for_st(erased_name: &str, st_ident: &Ident, sigs: &[Signature]) -> TokenStream2 {
     let erased_ident = clone_ident_with_name(st_ident, erased_name.trim());
 
     let mut erased_sigs = sigs.to_owned();
     let mut is_generics = Vec::new();
     for sig in erased_sigs.iter_mut() {
-        is_generics.push(sig.generics.lt_token.is_some());
+        is_generics.push(is_generic(sig));
         modify_signature_to_erased(sig);
     }
 
@@ -143,17 +140,13 @@ fn impl_erased_for_st(
     for (i, &is_generic) in is_generics.iter().enumerate() {
         let sig = sigs.get(i).unwrap();
         let esig = erased_sigs.get(i).unwrap();
-
         let arg_idents = get_idents(&esig.inputs);
-        // Assumes that the first arg is self.
-        let arg_idents = arg_idents.iter().skip(1);
 
         // TODO: Combinations of TypeId for multiple generics.
-        let block: syn::Block = if is_generic {
-            let generic_idents = get_nth_ident(sig, 0);
-            let first_generic_ident = generic_idents.get(0).unwrap();
-            let sig_ident = &sig.ident;
-
+        let sig_ident = &sig.ident;
+        let block: Block = if is_generic {
+            // Skips self and __type_id__.
+            let arg_idents = arg_idents.iter().skip(2);
             parse_quote! {{
                 let fn_table = self
                     .fn_table
@@ -161,15 +154,15 @@ fn impl_erased_for_st(
                     .take()
                     .expect("fn_table must be filled.");
                 let delegator = fn_table
-                    .get(&(#first_generic_ident as &dyn std::any::Any).type_id())
+                    .get(__type_id__)
                     .expect("fn_table doesn't have appropriate entry.");
                 let ret = (delegator)(self, #(#arg_idents),*);
                 self.fn_table.#sig_ident = Some(fn_table);
                 ret
             }}
         } else {
-            let sig_ident = &sig.ident;
-
+            // Skips self.
+            let arg_idents = arg_idents.iter().skip(1);
             parse_quote! {{
                 self.#sig_ident(#(#arg_idents),*)
             }}
@@ -190,12 +183,12 @@ fn impl_erased_for_st(
 
 /// Implements a function table builder for the struct.
 fn impl_fn_table_builder(
-    st: &syn::ItemStruct,
+    st: &ItemStruct,
     ident: &Ident,
     field_idents: &[Ident],
     field_type_idents: &[Ident],
-    sigs: &[syn::Signature],
-) -> proc_macro2::TokenStream {
+    sigs: &[Signature],
+) -> TokenStream2 {
     // Defines a function table builder.
     let vis = &st.vis;
     let builder = quote! {
@@ -245,7 +238,7 @@ fn impl_fn_table_builder(
                 map.insert(
                     std::any::TypeId::of::<#common_generic_ident>(),
                     std::boxed::Box::new(|s: &mut #st_ident, #(#args),*| {
-                        s.#ident(#(#casted),*)
+                        s.#ident::<#common_generic_ident>(#(#casted),*)
                     })
                 );
             }
@@ -269,11 +262,9 @@ fn impl_fn_table_builder(
                 self.add::<#common_generic_ident>();
                 self
             }
-            
+
             fn add <#common_generic> (&mut self) -> &mut Self {
-                #(
-                    #insert_blocks
-                )*
+                #(#insert_blocks)*
                 self
             }
         }

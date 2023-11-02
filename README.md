@@ -4,9 +4,9 @@ A Rust crate for generating trait objects from traits with generic methods.
 ## When to use
 
 - When you want to make a trait obejct from a trait having generic methods.
-- When generic methods have only one kind of bounds. (Please look at example below)
+- When generic methods have only one kind of bounds.
 - When generic methods require 'static lifetime.
-- When you can know all types that are passed to generic methods.
+- When you can know all types that are passed to generic methods before converting into a trait object.
 
 ## Motivation
 

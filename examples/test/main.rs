@@ -7,11 +7,11 @@ use std::{
 mod generic;
 use generic::*;
 
-
 // `ErasedGeneric` here is the trait name you used.
 // Other signatures must be exactly same with methods in the trait.
 #[inject_fn_table(
     ErasedGeneric;
+    fn generic_no_arg<E: Element>(&mut self);
     fn generic_writes<E: Element>(&mut self, param: &mut E);
     fn generic_reads<E: Element>(&mut self, param: &mut E);
     fn generic_multiple_arguments<E: Element>(
@@ -28,6 +28,10 @@ struct Handler {
 
 // Your generic implementation.
 impl Generic for Handler {
+    fn generic_no_arg<E: Element>(&mut self) {
+        println!("generic_no_arg() got an object of {:?}", TypeId::of::<E>());
+    }
+
     fn generic_writes<E: Element>(&mut self, param: &mut E) {
         // Simple and unsafe writing test.
         let mut dummy: E = unsafe { zeroed() };
@@ -111,11 +115,7 @@ fn main() {
     assert_eq!(D('3'), d_read);
 
     // Calls methods with multiple arguments.
-    let ret = trait_object.generic_multiple_arguments(
-        &mut A(0),
-        &A(0),
-        1,
-    );
+    let ret = trait_object.generic_multiple_arguments(&mut A(0), &A(0), 1);
     assert_eq!(2, ret);
 
     println!("Type A's id: {:?}", TypeId::of::<A>());

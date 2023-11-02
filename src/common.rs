@@ -1,4 +1,9 @@
-use syn::{parse_quote, Ident};
+use proc_macro2::Span;
+use syn::{
+    parse_quote, punctuated, token, FnArg, GenericParam, Generics, Ident, Pat, PatIdent, PatType,
+    Path, PathSegment, Receiver, Signature, Token, TraitBound, Type, TypeParam, TypeParamBound,
+    TypePath, TypeReference, TypeTraitObject,
+};
 
 /// Modifies `Ident` name with the given `new_name`.
 #[allow(dead_code)]
@@ -30,32 +35,32 @@ pub fn clone_ident_with_suffix(ident: &Ident, suffix: &str) -> Ident {
 /// Generates a new `Ident` with the given `name` and dummy `Span`.
 #[allow(dead_code)]
 pub fn gen_ident(name: &str) -> Ident {
-    Ident::new(name, proc_macro2::Span::call_site())
+    Ident::new(name, Span::call_site())
 }
 
 /// Gets ident and mutability of `FnArg`.
 #[allow(dead_code)]
-pub fn parse_arg(arg: &syn::FnArg) -> (&Ident, &syn::Type, Option<&syn::token::Mut>) {
+pub fn parse_arg(arg: &FnArg) -> (&Ident, &Type, Option<&token::Mut>) {
     match arg {
-        syn::FnArg::Typed(syn::PatType { ty, pat, .. }) => {
+        FnArg::Typed(PatType { ty, pat, .. }) => {
             let ident = match pat.as_ref() {
-                syn::Pat::Ident(syn::PatIdent { ident, .. }) => ident,
+                Pat::Ident(PatIdent { ident, .. }) => ident,
                 _ => unimplemented!(),
             };
             let mutability = match ty.as_ref() {
                 // & or &mut
-                syn::Type::Reference(syn::TypeReference { mutability, .. }) => mutability,
+                Type::Reference(TypeReference { mutability, .. }) => mutability,
                 // Not a reference
                 _ => &None,
             }
             .as_ref();
             (ident, ty.as_ref(), mutability)
         }
-        syn::FnArg::Receiver(syn::Receiver { ty, mutability, .. }) => {
+        FnArg::Receiver(Receiver { ty, mutability, .. }) => {
             let ident = match ty.as_ref() {
                 // & or &mut
-                syn::Type::Reference(syn::TypeReference { elem, .. }) => match elem.as_ref() {
-                    syn::Type::Path(syn::TypePath { path, .. }) => &path.segments[0].ident,
+                Type::Reference(TypeReference { elem, .. }) => match elem.as_ref() {
+                    Type::Path(TypePath { path, .. }) => &path.segments[0].ident,
                     _ => unimplemented!(),
                 },
                 // Not a reference
@@ -66,82 +71,84 @@ pub fn parse_arg(arg: &syn::FnArg) -> (&Ident, &syn::Type, Option<&syn::token::M
     }
 }
 
+/// Determines that the given `Type` is a & or &mut.
+#[allow(dead_code)]
+pub fn is_ref(ty: &Type) -> bool {
+    matches!(ty, Type::Reference(..))
+}
+
 /// Gets generic symbols like *T* from the `Generics`.
 #[allow(dead_code)]
-pub fn get_generic_symbols(generics: &syn::Generics) -> Vec<String> {
+pub fn get_generic_symbols(generics: &Generics) -> Vec<String> {
     generics.params.iter().map(get_generic_symbol).collect()
 }
 
 /// Gets generic symbol like *T* from the `GenericParam`.
 #[allow(dead_code)]
-pub fn get_generic_symbol(param: &syn::GenericParam) -> String {
+pub fn get_generic_symbol(param: &GenericParam) -> String {
     match param {
-        syn::GenericParam::Type(syn::TypeParam { ident, .. }) => ident.to_string(),
+        GenericParam::Type(TypeParam { ident, .. }) => ident.to_string(),
         _ => unimplemented!(),
     }
 }
 
 /// Changes generic reference parameters to `dyn Any` refererences.
 #[allow(dead_code)]
-pub fn change_arg_to_any<'a>(
-    arg: &mut syn::FnArg,
-    mut targets: impl Iterator<Item = &'a str>,
-) -> Result<(), ()> {
+pub fn change_arg_to_any<'a>(arg: &mut FnArg, mut targets: impl Iterator<Item = &'a str>) {
     // Gets into `PatType`
     let ty_dest = match arg {
-        syn::FnArg::Typed(syn::PatType { ty, .. }) => ty,
+        FnArg::Typed(PatType { ty, .. }) => ty,
         // Doesn't handle `Receiver`.
-        syn::FnArg::Receiver(..) => return Err(()),
+        FnArg::Receiver(..) => return,
     };
 
     // Gets into `TypeReference`
     let (mutability, ty) = match ty_dest.as_mut() {
         // &T or &mut T
-        syn::Type::Reference(syn::TypeReference {
+        Type::Reference(TypeReference {
             mutability, elem, ..
         }) => (mutability, elem),
         // Doesn't support other types for now.
-        _ => return Err(()),
+        _ => return,
     };
 
     // Skips not a generic reference.
     let first_seg = match ty.as_mut() {
-        syn::Type::Path(syn::TypePath {
-            path: syn::Path { segments, .. },
+        Type::Path(TypePath {
+            path: Path { segments, .. },
             ..
         }) => &mut segments[0],
         _ => unimplemented!(),
     };
     let ty = first_seg.ident.to_string();
     if targets.all(|t| ty.as_str() != t) {
-        return Err(());
+        return;
     }
 
     // Changes the `ty_dest` with `&mut dyn Any` or `&dyn Any`.
-    let new_type: syn::TypeReference = match mutability {
+    let new_type: TypeReference = match mutability {
         // &mut T
         Some(_) => parse_quote! { &mut dyn std::any::Any },
         // &
         None => parse_quote! { &dyn std::any::Any },
     };
-    *ty_dest = Box::new(syn::Type::Reference(new_type));
-    Ok(())
+    *ty_dest = Box::new(Type::Reference(new_type));
 }
 
 /// Changes generic reference parameters to `dyn Any` refererences.
 #[allow(dead_code)]
 pub fn change_args_to_anys<'a>(
-    args: impl Iterator<Item = &'a mut syn::FnArg>,
+    args: impl Iterator<Item = &'a mut FnArg>,
     targets: impl Iterator<Item = &'a str> + Clone,
 ) {
     for arg in args {
-        let _ = change_arg_to_any(arg, targets.clone());
+        change_arg_to_any(arg, targets.clone());
     }
 }
 
 /// Gets `Ident` if `FnArg` has the name of `target` as its type's `Ident`.
 #[allow(dead_code)]
-pub fn get_matched_ident<'a>(arg: &'a syn::FnArg, target: &str) -> Option<&'a Ident> {
+pub fn get_matched_ident<'a>(arg: &'a FnArg, target: &str) -> Option<&'a Ident> {
     let first_seg = get_nth_pathseg(arg, 0)?;
     let ty = first_seg.ident.to_string();
     if ty.as_str() == target {
@@ -154,12 +161,10 @@ pub fn get_matched_ident<'a>(arg: &'a syn::FnArg, target: &str) -> Option<&'a Id
 
 /// Gets `PathSegment`s from the given `FnArg(PatType->TypeReference->TypePath)`.
 #[allow(dead_code)]
-pub fn get_path_segments(
-    arg: &syn::FnArg,
-) -> Option<&syn::punctuated::Punctuated<syn::PathSegment, syn::Token![::]>> {
+pub fn get_path_segments(arg: &FnArg) -> Option<&punctuated::Punctuated<PathSegment, Token![::]>> {
     match unwrap_pattype_typereference(arg)? {
-        syn::Type::Path(syn::TypePath {
-            path: syn::Path { segments, .. },
+        Type::Path(TypePath {
+            path: Path { segments, .. },
             ..
         }) => Some(segments),
         _ => None,
@@ -168,29 +173,27 @@ pub fn get_path_segments(
 
 /// Gets `TypeParamBound`s from the given `FnArg(PatType->TypeReference->TypeTraitObject)`.
 #[allow(dead_code)]
-pub fn get_trait_bounds(
-    arg: &syn::FnArg,
-) -> Option<&syn::punctuated::Punctuated<syn::TypeParamBound, syn::Token![+]>> {
+pub fn get_trait_bounds(arg: &FnArg) -> Option<&punctuated::Punctuated<TypeParamBound, Token![+]>> {
     match unwrap_pattype_typereference(arg)? {
-        syn::Type::TraitObject(syn::TypeTraitObject { bounds, .. }) => Some(bounds),
+        Type::TraitObject(TypeTraitObject { bounds, .. }) => Some(bounds),
         _ => None,
     }
 }
 
 /// Unwraps `PatType` and `TypeReference`.
 #[allow(dead_code)]
-pub fn unwrap_pattype_typereference(arg: &syn::FnArg) -> Option<&syn::Type> {
+pub fn unwrap_pattype_typereference(arg: &FnArg) -> Option<&Type> {
     // Gets into `PatType`
     let ty = match arg {
-        syn::FnArg::Typed(syn::PatType { ty, .. }) => ty,
+        FnArg::Typed(PatType { ty, .. }) => ty,
         // Doesn't handle `Receiver`.
-        syn::FnArg::Receiver(..) => return None,
+        FnArg::Receiver(..) => return None,
     };
 
     // Gets into `TypeReference`
     let ty = match ty.as_ref() {
         // &T or &mut T
-        syn::Type::Reference(syn::TypeReference { elem, .. }) => elem,
+        Type::Reference(TypeReference { elem, .. }) => elem,
         // Doesn't support other types for now.
         _ => return None,
     };
@@ -200,13 +203,13 @@ pub fn unwrap_pattype_typereference(arg: &syn::FnArg) -> Option<&syn::Type> {
 
 /// Gets nth `PathSegment` from the given `FnArg(PatType->TypeReference->TypePath)`.
 #[allow(dead_code)]
-pub fn get_nth_pathseg(arg: &syn::FnArg, n: usize) -> Option<&syn::PathSegment> {
+pub fn get_nth_pathseg(arg: &FnArg, n: usize) -> Option<&PathSegment> {
     get_path_segments(arg)?.iter().nth(n)
 }
 
 /// Makes a generic method become non-generic.
 #[allow(dead_code)]
-pub fn modify_signature_to_erased(sig: &mut syn::Signature) {
+pub fn modify_signature_to_erased(sig: &mut Signature) {
     // Modifies fn names.
     let new_name = format!("erased_{}", sig.ident.to_string().as_str());
     modify_ident(&mut sig.ident, new_name.as_str());
@@ -223,23 +226,27 @@ pub fn modify_signature_to_erased(sig: &mut syn::Signature) {
     remove_generics(&mut sig.generics);
 
     // Change generic symbols in parameters into `dyn Any`.
-    let mut results = Vec::new();
     for arg in sig.inputs.iter_mut() {
-        results.push(change_arg_to_any(arg, symbols.iter().map(|s| s.as_str())));
+        change_arg_to_any(arg, symbols.iter().map(|s| s.as_str()));
     }
 
-    // Check out if there was no generic usage.
-    if results.iter().all(|res| res.is_err()) {
-        unimplemented!()
-    }
+    // Injects `__type_id__: &TypeId` as the second parameter.
+    inject_type_id(sig);
+}
+
+/// Injects `__type_id__: &TypeId` as the second parameter.
+#[allow(dead_code)]
+pub fn inject_type_id(sig: &mut Signature) {
+    let param: FnArg = parse_quote! { __type_id__: &std::any::TypeId };
+    sig.inputs.insert(1, param);
 }
 
 /// Removes `Generics`.
 #[allow(dead_code)]
-pub fn remove_generics(generics: &mut syn::Generics) {
-    *generics = syn::Generics {
+pub fn remove_generics(generics: &mut Generics) {
+    *generics = Generics {
         lt_token: None,
-        params: syn::punctuated::Punctuated::new(),
+        params: punctuated::Punctuated::new(),
         gt_token: None,
         where_clause: None,
     }
@@ -247,20 +254,20 @@ pub fn remove_generics(generics: &mut syn::Generics) {
 
 /// Gets `Ident`s from the list of `FnArg`.
 #[allow(dead_code)]
-pub fn get_idents(args: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>) -> Vec<Ident> {
+pub fn get_idents(args: &punctuated::Punctuated<FnArg, Token![,]>) -> Vec<Ident> {
     args.iter().map(|arg| get_ident(arg).clone()).collect()
 }
 
 /// Gets a `Ident` from the `FnArg`.
 #[allow(dead_code)]
-pub fn get_ident(arg: &syn::FnArg) -> &Ident {
+pub fn get_ident(arg: &FnArg) -> &Ident {
     let (ident, _, _) = parse_arg(arg);
     ident
 }
 
 /// Gets matched `Ident`s with the given nth generic parameter from the list of `FnArg`.
 #[allow(dead_code)]
-pub fn get_nth_ident(sig: &syn::Signature, n: usize) -> Vec<Ident> {
+pub fn get_nth_ident(sig: &Signature, n: usize) -> Vec<Ident> {
     let symbols = get_generic_symbols(&sig.generics);
     let symbol = symbols.into_iter().nth(n);
     if let Some(symbol) = symbol {
@@ -293,24 +300,24 @@ pub fn camel_case(snake_case: &str) -> String {
 
 /// Gets the nth `GenericParam` from the given `Signature`s.
 #[allow(dead_code)]
-pub fn get_nth_generic(sig: &syn::Signature, n: usize) -> Option<&syn::GenericParam> {
+pub fn get_nth_generic(sig: &Signature, n: usize) -> Option<&GenericParam> {
     sig.generics.params.iter().nth(n)
 }
 
 /// Determines that the given `Signature` is generic.
 #[allow(dead_code)]
-pub fn is_generic(sig: &syn::Signature) -> bool {
+pub fn is_generic(sig: &Signature) -> bool {
     get_nth_generic(sig, 0).is_some()
 }
 
 /// Determines that the given `FnArg` is a reference of Any.
 #[allow(dead_code)]
-pub fn is_any(arg: &syn::FnArg) -> bool {
+pub fn is_any(arg: &FnArg) -> bool {
     let bounds = get_trait_bounds(arg);
     if let Some(bounds) = bounds {
         if let Some(bound) = bounds.iter().next() {
             let path = match bound {
-                syn::TypeParamBound::Trait(syn::TraitBound { path, .. }) => path,
+                TypeParamBound::Trait(TraitBound { path, .. }) => path,
                 _ => unimplemented!(),
             };
             let last_ident = path.segments.last().unwrap().ident.to_string();
@@ -321,4 +328,10 @@ pub fn is_any(arg: &syn::FnArg) -> bool {
     } else {
         false
     }
+}
+
+/// Determines that the given `Signature` is associated function.
+#[allow(dead_code)]
+pub fn is_associated_function(sig: Signature) -> bool {
+    matches!(sig.inputs.first(), Some(&FnArg::Receiver(..)))
 }

@@ -7,9 +7,7 @@ pub fn add_fn_table(input: TokenStream) -> TokenStream {
     // Generates instance ident.
     let input = input.to_string();
     let mut split = input.trim().split(',');
-    let instance_name = split
-        .next()
-        .expect("Must put in the name of instance.");
+    let instance_name = split.next().expect("Must put in the name of instance.");
     let instance_ident = gen_ident(instance_name);
 
     // Generates add() chain.
