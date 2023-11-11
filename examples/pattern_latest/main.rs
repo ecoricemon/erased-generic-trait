@@ -123,9 +123,11 @@ impl Generic for Handler {
     }
 }
 
-type FnTableGeneric = HashMap<TypeId, Box<dyn Fn(&mut Handler)>>;
-type FnTableGenericWrites = HashMap<TypeId, Box<dyn Fn(&mut Handler, &mut dyn Any)>>;
-type FnTableGenericReads = HashMap<TypeId, Box<dyn Fn(&mut Handler, &mut dyn Any)>>;
+type FnTableGeneric = HashMap<TypeId, Box<dyn Fn(&mut Handler)>, ahash::RandomState>;
+type FnTableGenericWrites =
+    HashMap<TypeId, Box<dyn Fn(&mut Handler, &mut dyn Any)>, ahash::RandomState>;
+type FnTableGenericReads =
+    HashMap<TypeId, Box<dyn Fn(&mut Handler, &mut dyn Any)>, ahash::RandomState>;
 
 struct HandlerFnTable {
     generic: Option<FnTableGeneric>,
@@ -136,9 +138,9 @@ struct HandlerFnTable {
 impl HandlerFnTable {
     fn new() -> Self {
         Self {
-            generic: Some(FnTableGeneric::new()),
-            generic_writes: Some(FnTableGenericWrites::new()),
-            generic_reads: Some(FnTableGenericReads::new()),
+            generic: Some(FnTableGeneric::default()),
+            generic_writes: Some(FnTableGenericWrites::default()),
+            generic_reads: Some(FnTableGenericReads::default()),
         }
     }
 

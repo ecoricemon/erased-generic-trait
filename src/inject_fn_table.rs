@@ -115,7 +115,8 @@ fn gen_field(ast: TraitItemFn, st_ident: &Ident) -> Option<(Ident, Ident, TokenS
                 dyn std::ops::Fn(
                     #(#input_types),*
                 ) #output_type
-            >
+            >,
+            ahash::RandomState
         >;
     };
 
@@ -252,7 +253,7 @@ fn impl_fn_table_builder(
                 Self {
                     #(
                         #field_idents: std::option::Option::Some(
-                            #field_type_idents::new()
+                            #field_type_idents::default()
                         )
                     ),*
                 }

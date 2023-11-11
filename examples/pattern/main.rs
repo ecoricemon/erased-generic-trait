@@ -141,7 +141,7 @@ impl Generic for Handler {
 /// This is a literally function table.
 /// We can call a specific funtion using `TypeId` from the `dyn Any`.
 /// Each function in this table calls the real generic method.
-type FnTable = HashMap<TypeId, Box<dyn Fn(&mut Handler, &mut dyn Any)>>;
+type FnTable = HashMap<TypeId, Box<dyn Fn(&mut Handler, &mut dyn Any)>, ahash::RandomState>;
 
 /// `FnTable`s for Handler.
 struct HandlerFnTable {
@@ -158,8 +158,8 @@ impl HandlerFnTable {
     // Empty tables.
     fn new() -> Self {
         Self {
-            generic_writes: Some(FnTable::new()),
-            generic_reads: Some(FnTable::new()),
+            generic_writes: Some(FnTable::default()),
+            generic_reads: Some(FnTable::default()),
         }
     }
 
